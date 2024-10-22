@@ -1,3 +1,3 @@
-# Data Analysis Projects# DataWorks
+# Data Analysis Projects
 
 ## Projects List
