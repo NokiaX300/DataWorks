@@ -1,6 +1,6 @@
 ---
 title: "Influence on days an animal spends in shelter"
-author: "Group 20"
+author: "Nokia"
 number-sections: true
 format: 
   html:
