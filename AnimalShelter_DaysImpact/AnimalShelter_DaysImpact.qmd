@@ -1,0 +1,514 @@
+---
+title: "Influence on days an animal spends in shelter"
+author: "Group 20"
+number-sections: true
+format: 
+  html:
+    embed-resources: true
+    code-tools: true
+  pdf: 
+    fig-pos: "H"
+    toc: true
+    toc_depth: 3
+editor_options: 
+  chunk_output_type: console
+execute:
+  echo: false
+  eval: true
+  warning: false
+  message: false
+---
+
+```{r}
+library(gt)
+library(dplyr)
+library(ggplot2)
+library(gmodels)
+library(car)
+library(AER)
+library(MASS)
+```
+
+```{r}
+tab = function(df, var1, var2){
+  CrossTable(df[, var1], df[, var2],
+             prop.r = T,
+             prop.c = F,
+             prop.t = F,
+             prop.chisq = F,
+             dnn = c(var1, var2))
+}
+```
+
+# Introduction
+
+A study is conducted using dataset from the Dallas animal shelter, aiming to uncover the factors affecting how long animals remain at the shelter before a final decision on their outcome is made. The insights gained may help improve animal welfare and shelter efficiency.
+
+# Description of the Dataset
+
+Each of the 5 datasets contain a variety of information relating to each animal admitted to the shelter.
+
+```{r, include=FALSE}
+data <- read.csv('dataset20.csv', stringsAsFactors = FALSE)
+sum(is.na(data))
+colnames(data) <- c('type', 'month', 'year', 'intake', 'outcome', 'chip', 'duration')
+```
+
+```{r}
+#| label: tbl-desc
+#| tbl-cap: 'Description of the Dataset'
+desc_var <- c('The type of animal admitted to the shelter',
+              'Month the animal was admitted',
+              'Year the animal was admitted',
+              'Reason for the animal being admitted',
+              'Final outcome for the admitted animal',
+              'Did the animal have a microchip with owner information',
+              'Days spent at the shelter between being admitted and the final outcome')
+tbl <- cbind(colnames(data), desc_var)
+colnames(tbl) <- c('Variable', 'Description')
+knitr::kable(tbl)
+```
+
+@tbl-desc presents details about the variables in dataset. It is noteworthy that our dataset is complete, with no missing values across variables. We focus on the duration animals stay at the shelter before reaching their final outcome, which is quantified by the variable 'duration'.
+
+```{r, include=FALSE}
+char_vars <- sapply(data, is.character)
+data[char_vars] <- lapply(data[char_vars], function(x) {
+  factor(x)
+})
+str(data)
+```
+
+# Exploratory Data Analysis
+
+## numerical variables
+
+```{r}
+#| label: fig-duration
+#| fig-cap: distribution of duration
+ggplot(data, aes(x=duration)) + 
+  geom_histogram(binwidth=1, fill='blue', color='black')
+```
+
+As seen in @fig-duration, most animals stay in the shelter for a short period of time, while a few animals stay in the shelter for a long time. Although the histogram itself does not display outliers, the long tail suggests that there are relatively few cases that have stayed in the shelter for a very long time, which may be outliers.
+
+```{r, include=FALSE}
+Q1 <- quantile(data$duration, 0.25)
+Q3 <- quantile(data$duration, 0.75)
+IQR <- Q3 - Q1
+upper <- Q3 + 1.5 * IQR
+out <- which(data$duration > upper)
+med <- median(data$duration)
+data$duration[out] <- med
+```
+
+```{r}
+ggplot(data, aes(x=month,y=duration, group=month))+
+  geom_boxplot(aes(fill=month))
+ggplot(data, aes(x=year,y=duration, group=year))+
+  geom_boxplot(aes(fill=year))
+```
+
+We can see duration vary little across different months and years, so we may consider ignore these two variables when modelling.
+
+## categorical variables
+
+```{r}
+#| label: tbl-type
+#| tbl-cap: 'type of animals'
+knitr::kable(prop.table(table(data$type)))
+data <- data %>%
+  filter(!(type == "BIRD" | type == "WILDLIFE")) %>%
+  droplevels()
+```
+
+Birds and wildlife only make up the 0.002 and 0.008 of the datasets, so they don't have a significant impact on the results. We then remove these observations.
+
+```{r}
+#| label: fig-intake
+#| fig-cap: distribution of intake
+ggplot(data, aes(y=duration, x=intake, group=intake))+
+  geom_boxplot(aes(fill=intake))+
+  theme(legend.position = "none")
+```
+
+Remove corresponding outliers according to the reason the animal was admitted to the shelter.
+
+```{r}
+replace <- function(data, variable, category) {
+  Q1 <- quantile(data[[variable]][data$intake==category], 0.25)
+  Q3 <- quantile(data[[variable]][data$intake==category], 0.75)
+  IQR <- Q3 - Q1
+  upper <- Q3 + 1.5 * IQR
+  out <- which(data$intake==category & data[[variable]] > upper)
+  med <- median(data[[variable]][data$intake==category])
+  data[[variable]][out] <- med
+  return(data)
+}
+categories <- unique(data$intake)
+for(cat in categories) {
+  data <- replace(data, 'duration', cat)
+}
+```
+
+```{r}
+#| label: fig-outcome
+#| fig-cap: distribution of outcome
+ggplot(data, aes(y=duration, x=outcome, group=outcome))+
+  geom_boxplot(aes(fill=outcome))+
+  theme(legend.position = "none")
+```
+
+Remove corresponding outliers according final outcome.
+
+```{r}
+replace2 <- function(data, variable, category) {
+  Q1 <- quantile(data[[variable]][data$outcome == category], 0.25)
+  Q3 <- quantile(data[[variable]][data$outcome == category], 0.75)
+  IQR <- Q3 - Q1
+  upper <- Q3 + 1.5 * IQR
+  out <- which(data$outcome == category & data[[variable]] > upper)
+  med <- median(data[[variable]][data$outcome == category])
+  data[[variable]][out] <- med
+  return(data)
+}
+categories <- unique(data$outcome)
+for(cat in categories) {
+  data <- replace2(data, 'duration', cat)
+}
+```
+
+```{r}
+#| label: fig-chip
+#| fig-cap: distribution of chip
+ggplot(data, aes(y=duration, x=chip, group=chip))+
+  geom_boxplot(aes(fill=chip))+
+  theme(legend.position = "none")
+```
+
+Remove corresponding outliers according whether the animal have a microchip with owner information.
+
+```{r}
+replace3 <- function(data, variable, category) {
+  Q1 <- quantile(data[[variable]][data$chip == category], 0.25)
+  Q3 <- quantile(data[[variable]][data$chip == category], 0.75)
+  IQR <- Q3 - Q1
+  upper <- Q3 + 1.5 * IQR
+  out <- which(data$chip == category & data[[variable]] > upper)
+  med <- median(data[[variable]][data$chip == category])
+  data[[variable]][out] <- med
+  return(data)
+}
+categories <- unique(data$chip)
+for(cat in categories) {
+  data <- replace3(data, 'duration', cat)
+}
+```
+
+```{r}
+pvalues <- data.frame(
+  Variable = c("type", "intake", "outcome", "chip"),
+  P_Value = c(
+    chisq.test(data$type, data$duration)$p.value,
+    chisq.test(data$intake, data$duration)$p.value,
+    chisq.test(data$outcome, data$duration)$p.value,
+    chisq.test(data$chip, data$duration)$p.value
+  )
+)
+knitr::kable(pvalues)
+```
+
+-   The chi-square test for all categorical variables have p-value less than 0.05. So they are all significant associated with the response variable duration.
+
+```{r}
+model <- lm(duration~., data = data)
+knitr::kable(vif(model))
+```
+
+-   VIF values for type, chip, intake and outcome are all less than 5, suggesting that the linearity problems between them are minor and are unlikely to affect the model's results
+-   However month and year have a relatively high value compared to other variables, which also contribute to the reason we drop them.
+
+# Formal Data Analysis
+
+In this section, several formal statistical models will be conducted using a Generalized Model Analysis to infer the relationships between variables.
+
+## Poisson Model
+
+Since the response variable represents the count data, the Poisson regression model is a starting point because it is the simplest model for the type of the data. It was conducted by this result:
+
+```{r, include=FALSE}
+# Please decide whether month and year should be removed!!!
+data <- subset(data, select = -month)
+data <- subset(data, select = -year)
+glm_poisson <- glm(duration~., family = "poisson", data = data)
+summary(glm_poisson)
+```
+
+Before presenting and interpreting the derived equation from our GLM analysis, it is important to note that validating the model is underlying assumptions is a critical step. Ensuring the assumptions hold true bolsters the reliability of our findings. Here's the equation based on the initial analysis, subject to further validation:
+
+$$
+\begin{aligned}
+\log(\text{Expected Count of Time at Shelter}) &= 2.48068 \\
+&+ 0.18080 \times \text{TypeDog} \\
+&- 1.11596 \times \text{IntakeOwnerSurrender} \\
+&- 0.63153 \times \text{IntakeStray} \\
+&- 0.99932 \times \text{OutcomeDied} \\
+&- 0.70378 \times \text{OutcomeEuthanized} \\
+&- 0.69878 \times \text{OutcomeFoster} \\
+&- 1.31990 \times \text{OutcomeReturnedToOwner} \\
+&- 0.14291 \times \text{ChipScanNoChip} \\
+&- 0.38348 \times \text{ChipUnableToScan}
+\end{aligned}
+$$
+
+where,
+
+-   $\text{TypeDog}$ is the indicator variable for the animal types, taking the value 1 if the condition is true and 0 otherwise with the baseline category $\text{TypeCat}$.
+
+-   $\text{IntakeOwnerSurrender}$ and $\text{IntakeStray}$ are indicator variables for the intake types, taking the value 1 if the condition is true and 0 otherwise with the baseline category $\text{IntakeConfiscated}$.
+
+-   $\text{OutcomeDied}$, $\text{OutcomeEuthanized}$, $\text{OutcomeFoster}$, $\text{OutcomeReturnedToOwner}$ are indicator variables for the outcome, taking the value 1 if the condition is true and 0 otherwise with the baseline category $\text{OutcomeAdoption}$.
+
+-   $\text{ChipScanNoChip}$ and $\text{ChipUnableToScan}$ are indicator variables for the intake types, taking the value 1 if the condition is true and 0 otherwise with the baseline category $\text{ChipScanChip}$.
+
+The significance of a Generalized Linear Model (GLM) can be assessed by examining the p-values associated with the coefficients of the model, which indicate the strength of evidence against the null hypothesis that the corresponding coefficients are equal to zero. A small p-value (in this case, compared to the significance level 0.05) indicates strong evidence against the null hypothesis, suggesting that it is unlikely to observe such a significant effect if the predictor really had no impact on the response variable.
+
+Conversely, a large p-value suggests insufficient evidence to reject the null hypothesis, indicating that the predictor may not have a significant effect on the response variable.
+
+Derived from the model, all variables are significant predictors of the time an animal spends in the shelter.
+
+### Model Diagnostics and Assumptions Checking
+
+The analysis utilized a Poisson regression model to investigate the impact of factors such as, including $\text{AnimalType}$, $\text{IntakeType}$, $\text{OutcomeType}$ and $\text{ChipStatus}$ on the duration of stay in a shelter. To ensure the robustness of our model, we conducted a thorough diagnostic evaluation using several methods. We checked the dispersion parameter to evaluate the presence of overdispersion, which would violate the Poisson assumption of equal mean and variance. We also examined the deviance to assess the model's goodness-of-fit, with a value near the degrees of freedom indicating a well-fitting model. Additionally, we conducted a residual analysis, including plotting residuals against fitted values and creating Q-Q plots of standardized residuals, to detect any systematic patterns that might indicate model misspecification. Together, these diagnostics help validate our model and confirm the reliability of our conclusions.
+
+**Dispersion**
+
+In a Poisson generalized linear model (GLM), the dispersion parameter is assumed to be fixed at 1. This assumption is crucial because the Poisson distribution is characterized by its mean being equal to its variance, a property known as *equidispersion*. When the observed variance is greater than the mean, the data exhibit over-dispersion. This is more common in practice and can arise from various sources, such as unobserved heterogeneity among observations, excess zeros, or violations of the Poisson model's assumptions (such as events not occurring independently).
+
+Then, the hypothesis being tested relates to the dispersion of the data with a significance level 5% is stated below:
+
+-   Null Hypothesis (H0):
+
+    The null hypothesis posits that the true dispersion parameter equals 1. This means the data follow a Poisson distribution accurately, where the mean and variance of the count data are equal (equidispersion). The model is adequately specified, and there's no extra variability in the data beyond what the Poisson model accounts for.
+
+-   Alternative Hypothesis (Ha):
+
+    The alternative hypothesis suggests that the true dispersion parameter is greater than 1, indicating over-dispersion in the data. Overdispersion occurs when the observed variance in the count data is greater than what the Poisson model would predict based on the mean.
+
+```{r}
+dispersiontest(glm_poisson)
+# 2.584389
+```
+
+```{r}
+#| label: fig-resid
+#| fig-cap: residual
+ggplot(glm_poisson, aes(x = log(fitted(glm_poisson)), y = log((data$duration - fitted(glm_poisson))^2))) + geom_point(col = "#DD7A65") + geom_abline(slope = 1, intercept = 0, col = "#F58B05", size = 1) + ylab(expression((y-hat(mu))^2)) + xlab(expression(hat(mu)))
+```
+
+**Interpretation:**
+
+-   p-value is extremely small, below the significance level, which indicates that the result is highly statistically significant. Hence, this supports the alternative hypothesis that the true dispersion is greater than 1.
+
+-   The sample estimated - dispersion is 2.584389 which is substantially greater than 1, indicating over-dispersion in the data.
+
+-   Meanwhile, a common way to assess dispersion in a Poisson model is through a plot of the residuals which is displayed in @fig-resid. It suggests that as the predicted values increase, the variance of the residuals also increases, which is a classic sign of over-dispersion. Over-dispersion is when the variance is greater than the mean, which often occurs with count data.
+
+-   Given this evidence of over-dispersion, it would be prudent to consider alternative models that can accommodate the extra variability, such as a Negative Binomial regression model which will be conducted later.
+
+**Deviance:**
+
+Deviance is used to quantify the difference between a fitted model and a perfect model (a saturated model that fits the data exactly). The deviance essentially quantifies the discrepancy between the observed data and the values predicted by the model under the assumption that the model is correct. A lower deviance indicates a better fit of the model to the data.
+
+Hence, based on the generated model result, we got:
+
+-   Null Deviance: this represents the goodness of fit of a model that includes only the intercept (no predictors). It is 5122.4 on 1449 degrees of freedom.
+
+-   Residual Deviance: This is the goodness of fit of the model that includes predictors ($\text{AnimalType}$, $\text{IntakeType}$, $\text{OutcomeType}$ and $\text{ChipStatus}$). It is 3759.4 on 1440 degrees of freedom.
+
+The residual deviance is used to assess the fit of the model to the data. For a well-fitting model, the residual deviance should be close to the degrees of freedom (relatively low). Here, the residual deviance (3759.4) is quite high compared to the Chi-square distribution with the 1440 - degrees of freedom, which might indicate that the model does not fit the data perfectly. This could be a sign of over-dispersion or that the model is missing some key explanatory variables.
+
+**Residuals Analysis**
+
+-   Plotting residuals vs. fitted values
+
+```{r}
+#| fig-cap: Residuals vs Fitted Values
+#| label: fig-residanalysis1
+#| fig-align: center
+#| fig-width: 4
+#| fig-height: 3
+
+plot(glm_poisson$fitted.values, residuals(glm_poisson, type = "deviance"), 
+     xlab = "Fitted Values", ylab = "Deviance Residuals", pch = 20)
+abline(h = 0, col = "red")
+```
+
+Based on the plot @fig-residanalysis1 The residuals plot here shows that as the fitted values increase, the spread of the residuals also increases. The increase in the spread of residuals as the fitted values increase suggests that the variance of the residuals is not constant. This pattern indicates potential over-dispersion in the data where the variance exceeds the mean.
+
+-   Scale location plot (spread vs. level plot)
+
+```{r}
+#| fig-cap: Scale-Location
+#| label: fig-residanalysis2
+#| fig-align: center
+#| fig-width: 4
+#| fig-height: 3
+plot(glm_poisson$fitted.values, sqrt(abs(residuals(glm_poisson, type = "pearson"))), xlab = "Fitted Values", ylab = "√|Standardized Pearson Residuals|")
+```
+
+The plot @fig-residanalysis2 represents a scatter plot of the square root of the absolute standardized Pearson residuals versus the fitted values from a Generalized Linear Model (GLM). It will give the information about the move of the variance across different levels of the mean, making it easier to see whether there is a consistent spread of residuals across all counts or whether the spread increases with the count (which would indicate over-dispersion).
+
+This pattern suggests possible over-dispersion in the data and will be advisable to consider model alternatives like the negative binomial regression.
+
+-   Residual vs. leverage
+
+```{r}
+#| fig-cap: Residuals vs Leverage
+#| label: fig-residanalysis3
+#| fig-align: center
+#| fig-width: 4
+#| fig-height: 3
+plot(hatvalues(glm_poisson), residuals(glm_poisson, type = "pearson"), xlab = "Leverage", ylab = "Pearson Residuals")
+abline(h = 0, col = "red")
+```
+
+Most of the data points cluster at the left side of the plot, suggesting that these observations have lower leverage and smaller residuals, shown by the plot @fig-residanalysis3. Then, they don't have an undue influence on the model which seems the model fits well for the majority of the data.
+
+However, the presence of points with high residuals and high leverage in the right side suggests there are some exceptions where the model's fit is not as good. Hence, it would be that while the model appears to provide a good fit for most of the data, there are specific observations that require further investigation to ensure the model's robustness and to potentially improve its accuracy.
+
+When diagnostic plots provide different insights, it is crucial to consider the overall evidence and the specific research context. If over-dispersion is a consistent concern across multiple diagnostics (like the Residuals vs. Fitted Values Plot and the Scale-Location Plot), it often outweighs indications from other plots that the model might be adequate for most data points. Therefore, even if the Residuals vs. Leverage Plot suggests the model is mostly fitting well, the evidence of over-dispersion from the other plots is a strong indicator that the Poisson model might not be the best choice. Exploring alternative models like the Negative Binomial, which can accommodate over-dispersion, is likely a prudent step to improve model fit and ensure more reliable inference from the model.
+
+## Negative Binomial Model
+
+It will be conducted the Negative Binomial Model which is a good alternative model when the assumption of equidispersion (mean equals variance) in Poisson regression doesn't hold. The result was shown by:
+
+```{r, include=FALSE}
+glm_nb <- glm.nb(duration~., data = data)
+summary(glm_nb)
+```
+
+$$
+\begin{aligned}
+\log(\text{Expected Count of Time at Shelter}) &= 2.58882 \\
+&+ 0.22863 \times \text{TypeDog} \\
+&- 1.23810 \times \text{IntakeOwnerSurrender} \\
+&- 0.75541 \times \text{IntakeStray} \\
+&- 0.99159 \times \text{OutcomeDied} \\
+&- 0.75098 \times \text{OutcomeEuthanized} \\
+&- 0.67674 \times \text{OutcomeFoster} \\
+&- 1.39817 \times \text{OutcomeReturnedToOwner} \\
+&- 0.15081 \times \text{ChipScanNoChip} \\
+&- 0.40916 \times \text{ChipUnableToScan}
+\end{aligned}
+$$
+
+where,
+
+-   $\text{TypeDog}$ is the indicator variable for the animal types, taking the value 1 if the condition is true and 0 otherwise with the baseline category $\text{TypeCat}$.
+
+-   $\text{IntakeOwnerSurrender}$ and $\text{IntakeStray}$ are indicator variables for the intake types, taking the value 1 if the condition is true and 0 otherwise with the baseline category $\text{IntakeConfiscated}$.
+
+-   $\text{OutcomeDied}$, $\text{OutcomeEuthanized}$, $\text{OutcomeFoster}$, $\text{OutcomeReturnedToOwner}$ are indicator variables for the outcome, taking the value 1 if the condition is true and 0 otherwise with the baseline category $\text{OutcomeAdoption}$.
+
+-   $\text{ChipScanNoChip}$ and $\text{ChipUnableToScan}$ are indicator variables for the intake types, taking the value 1 if the condition is true and 0 otherwise with the baseline category $\text{ChipScanChip}$.
+
+Derived from the model, all variables are significant predictors of the time an animal spends in the shelter.
+
+### Model Diagnostics and Assumptions Checking
+
+To ensure the reliability and validity of our Negative Binomial regression model findings, it is imperative to rigorously examine the underlying assumptions through a series of diagnostic checks.
+
+**Over-dispersion Check**
+
+Attained from the model summary, we can draw the result that the parameter $\text{Theta}$: 2.189 along with a relatively small standard error $\text{Std.Err}$: 0.16 which indicates that the model has identified and is accounting for over-dispersion in the data. It suggest that the Negative Binomial model is a suitable choice for the data, given the presence of over-dispersion as a positive outcome in terms of assumptions checking for the model.
+
+**Residual Deviance**
+
+Deviance in GLMs is a measure of the goodness-of-fit of a model. It is based on the likelihood function and compares two models between the fitted model and a reference model. The lower the deviance, the closer the fitted model is to the reference model in terms of likelihood. Comparing the residual deviance to the degrees of freedom helps assess if the fitted model is adequately fitting the data without overfitting. If the residual deviance is close to the degrees of freedom for the fitted model, it suggests that the model is adequately fitting the data.
+
+Then, in the model summary, attained the Residual Deviance: 1795.2 with the 1440 degrees of freedom and the Null Deviance: 2316.9 with the 1449 degrees of freedom, this shows how much better the model fits the data compared to the model with only the intercept.
+
+**Residual Analysis**
+
+In evaluating the adequacy of our Negative Binomial regression model, a series of residual diagnostic plots were examined, including Residuals vs Fitted, Normal Q-Q, Scale-Location, and Residuals vs Leverage, each offering insights into different aspects of model fit and underlying assumptions.
+
+-   Residuals vs. Fitted Values Plot
+
+```{r}
+#| fig-cap: Residuals vs Fitted Values
+#| label: fig-BN1
+#| fig-align: center
+#| fig-width: 4
+#| fig-height: 3
+par(mfrow = c(1,1))
+plot(glm_nb, which = 1)
+```
+
+Shown in the plot @fig-BN1, the residuals seem to increase slightly in variance with smaller fitted values, suggesting potential mild heteroscedasticity. However, since this is count data being modeled with a Negative Binomial regression, some of this is to be expected and the model accounts for it. There may be some potential outliers, but their influence would need further investigation, possibly with additional diagnostics like Cook's distance.
+
+-   Normal Q-Q Plot:
+
+```{r}
+#| fig-cap: Normal Q-Q Plot
+#| label: fig-BN2
+#| fig-align: center
+#| fig-width: 4
+#| fig-height: 3
+par(mfrow = c(1,1))
+plot(glm_nb, which = 2)
+```
+
+In the Q-Q plot @fig-BN2, the residuals deviate from the line at both ends, indicating that the residuals might not be following a normal distribution, which is a common issue for count data and is often the reason for using a Negative Binomial model instead of Poisson.
+
+-   Scale-Location Plot
+
+```{r}
+#| fig-cap: Scale-Location
+#| label: fig-BN3
+#| fig-align: center
+#| fig-width: 4
+#| fig-height: 3
+par(mfrow = c(1,1))
+plot(glm_nb, which = 3)
+```
+
+The red line, captured on the plot @fig-BN3, shows some fluctuation but does not exhibit a clear or strong trend which indicates potential mild heteroscedasticity.
+
+-   Residuals vs. Leverage
+
+```{r}
+#| fig-cap: Residuals vs Leverage
+#| label: fig-BN4
+#| fig-align: center
+#| fig-width: 4
+#| fig-height: 3
+par(mfrow = c(1,1))
+plot(glm_nb, which = 4)
+```
+
+Observations with higher Cook's distance values are worth examining because they might be outliers or influential data points that could unduly affect the model's coefficients, predictions, and overall fit. Based on the plot @fig-BN4, most observations have a Cook's distance close to zero, indicating they have little influence on the regression model. However, there are a few observations, labeled with their observation numbers, that stand out with higher Cook's distance values yet not necessarily a problem for the fitting model.
+
+**Summary of Model Diagnostic**
+
+In conclusion, the model appears to perform well in terms of fitting the central tendency and dispersion of the data, as suggested by the lack of systematic patterns in residuals and the appropriate handling of over-dispersion.
+
+## Model selection
+
+We employ a backward elimination process guided by the Akaike Information Criterion (AIC) to identify the most parsimonious model that adequately explains the variation in the time animals spend at the shelter. This approach systematically removes the least significant predictors from the full model, optimizing the balance between model complexity and fit to the data.
+
+```{r}
+glm_nb_optimal <- stepAIC(glm_nb, direction = "backward")
+```
+
+The output of the stepAIC function with the direction set to "backward" suggests that the most parsimonious model according to the Akaike Information Criterion (AIC) is actually the initial model. The result of $\text{<none>}$ : 6756.6 as the lowest AIC indicates to remove no predictors from the current model.
+
+# Conclusion
+
+This study analyzed the factors affecting the length of stay in the Dallas animal shelter. From exploratory data analysis, we found that most animals stay in shelters for a short time, and only a few stay for a long time.
+
+In formal data analysis, we first tried the Poisson Regression Model, because the response variable represents the count data. However, diagnostic tests showed that there is over-dispersion in the data, suggesting that the Poisson Regression Model may not be the best option. Then we used the Negative Binomial Model, which adapts to the over-dispersion phenomenon.
+
+Diagnostic analyses of Negative Binomial Model reveal that the model performs well, despite mild heteroscedasticity and potential outliers.
+
+In summary, our analysis shows that lots of important predictive variables influence the length of time an animal remain at the shelter before a final decision on their outcome is made, including the type of animal, the reason it was sent to the shelter, the final outcome, and if the animal has a microchip with owner information.
