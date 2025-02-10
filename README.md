@@ -1,6 +1,6 @@
-## :watermelon: 时空随笔
+## :watermelon: 求职笔记
 
-## :zap: [计算机基础](./Week01)[^1]
+## :zap: 计算机基础[^1]
 
 - [计算机基础](./Week04/Day1.ipynb)
     - [计算机网络](./Week03/Day1.ipynb)
@@ -9,7 +9,10 @@
 - [面向对象](./Week05/Day5.ipynb)
 - [编码实践](./Week06/Day1.ipynb)
 
-## :zap: [面试经验](./Week07/Day1.ipynb)
+## :zap: 面试经验
+
+- [预备知识](./Week08/Day1.ipynb)
+- [实战环节](./Week07/Day1.ipynb)
 
 ## :zap: [机器学习项目](./Week09/Day1.ipynb)
 
